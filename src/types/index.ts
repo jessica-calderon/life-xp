@@ -12,6 +12,7 @@ export interface StatusEffect {
   name: string;
   type: 'buff' | 'debuff';
   statModifiers: Partial<Stats>;
+  regenerationModifiers?: Partial<Stats>; // modifiers to regeneration rates
   duration: number; // in milliseconds
   expiresAt: number; // timestamp
   description?: string;
@@ -23,5 +24,6 @@ export interface Character {
   stats: Stats;
   statusEffects: StatusEffect[];
   lastRegenerationTime: number; // timestamp
+  justLeveledUp?: boolean; // lightweight level-up state flag
 }
 

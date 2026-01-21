@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { create } from 'zustand';
 import { Character, Stats, StatusEffect } from '../types';
-import { addXP, removeExpiredStatusEffects } from '../domain/character';
+import { addXP, removeExpiredStatusEffects, clearLevelUpFlag } from '../domain/character';
 import { applyRegeneration } from '../domain/regeneration';
 
 const STORAGE_KEY = '@life-xp:character';
@@ -28,12 +28,14 @@ interface CharacterStore {
   
   // Actions
   initialize: () => Promise<void>;
-  addXP: (amount: number) => void;
+  gainXP: (amount: number) => void; // Public API for gaining XP
+  addXP: (amount: number) => void; // Internal alias
+  clearLevelUpFlag: () => void;
   updateStat: (statType: keyof Stats, value: number) => void;
   addStatusEffect: (effect: Omit<StatusEffect, 'id' | 'expiresAt'>) => void;
   removeStatusEffect: (id: string) => void;
   processRegeneration: () => void;
-  resetCharacter: () => void;
+  resetCharacter: () => Promise<void>;
   
   // Internal
   _saveToStorage: () => Promise<void>;
@@ -51,6 +53,8 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
       const now = Date.now();
       let character = applyRegeneration(stored, now);
       character = removeExpiredStatusEffects(character);
+      // Clear level-up flag on load (it's a session flag)
+      character.justLeveledUp = undefined;
       
       set({ character, isInitialized: true });
       await get()._saveToStorage();
@@ -60,8 +64,19 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     }
   },
 
-  addXP: (amount: number) => {
+  gainXP: (amount: number) => {
     const updated = addXP(get().character, amount);
+    set({ character: updated });
+    get()._saveToStorage();
+  },
+
+  addXP: (amount: number) => {
+    // Alias for gainXP for backward compatibility
+    get().gainXP(amount);
+  },
+
+  clearLevelUpFlag: () => {
+    const updated = clearLevelUpFlag(get().character);
     set({ character: updated });
     get()._saveToStorage();
   },
@@ -116,9 +131,21 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     get()._saveToStorage();
   },
 
-  resetCharacter: () => {
-    set({ character: DEFAULT_CHARACTER });
-    get()._saveToStorage();
+  resetCharacter: async () => {
+    // Clear AsyncStorage
+    try {
+      await AsyncStorage.removeItem(STORAGE_KEY);
+    } catch (error) {
+      console.error('Failed to clear character storage:', error);
+    }
+    // Reset Zustand store to default values with fresh timestamp
+    const resetCharacter: Character = {
+      ...DEFAULT_CHARACTER,
+      lastRegenerationTime: Date.now(),
+    };
+    set({ character: resetCharacter });
+    // Save the default state to storage
+    await get()._saveToStorage();
   },
 
   _saveToStorage: async () => {

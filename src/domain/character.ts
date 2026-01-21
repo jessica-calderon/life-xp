@@ -3,15 +3,24 @@ import { Character, Stats, StatusEffect, StatType } from '../types';
 // Constants
 export const MAX_STAT_VALUE = 100;
 export const MIN_STAT_VALUE = 0;
-export const BASE_XP_PER_LEVEL = 100;
-export const XP_SCALING_FACTOR = 1.5;
 
 /**
  * Calculate XP required for a given level
+ * Scales gently: 100 → 130 → 170 → 220 → ...
+ * Formula: Level 2 = 100, then increment increases by 10 each level
  */
 export function getXPRequiredForLevel(level: number): number {
   if (level <= 1) return 0;
-  return Math.floor(BASE_XP_PER_LEVEL * Math.pow(level - 1, XP_SCALING_FACTOR));
+  if (level === 2) return 100;
+  
+  // For level n >= 3: increment = 20 + 10*(n-2)
+  // XP = 100 + sum of increments from level 3 to level n
+  let total = 100;
+  for (let i = 3; i <= level; i++) {
+    const increment = 20 + 10 * (i - 2);
+    total += increment;
+  }
+  return total;
 }
 
 /**
@@ -46,16 +55,31 @@ export function getLevelFromXP(totalXP: number): number {
 
 /**
  * Add XP to character and return updated character
+ * Handles level-ups and XP carryover
  */
 export function addXP(character: Character, xpAmount: number): Character {
-  const newTotalXP = character.xp + getTotalXPForLevel(character.level) + xpAmount;
+  const currentTotalXP = getTotalXPForLevel(character.level) + character.xp;
+  const newTotalXP = currentTotalXP + xpAmount;
   const newLevel = getLevelFromXP(newTotalXP);
   const newXP = newTotalXP - getTotalXPForLevel(newLevel);
+  
+  const justLeveledUp = newLevel > character.level;
   
   return {
     ...character,
     level: newLevel,
     xp: newXP,
+    justLeveledUp: justLeveledUp || undefined,
+  };
+}
+
+/**
+ * Clear the level-up flag
+ */
+export function clearLevelUpFlag(character: Character): Character {
+  return {
+    ...character,
+    justLeveledUp: undefined,
   };
 }
 
@@ -93,9 +117,14 @@ export function applyStatusEffectModifiers(baseStats: Stats, statusEffects: Stat
 
 /**
  * Get effective stats (base stats + status effect modifiers)
+ * Only applies active (non-expired) status effects
  */
 export function getEffectiveStats(character: Character): Stats {
-  return applyStatusEffectModifiers(character.stats, character.statusEffects);
+  const now = Date.now();
+  const activeEffects = character.statusEffects.filter(
+    (effect) => effect.expiresAt > now
+  );
+  return applyStatusEffectModifiers(character.stats, activeEffects);
 }
 
 /**

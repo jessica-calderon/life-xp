@@ -6,6 +6,7 @@ import {
   ScrollView,
   Animated,
   useColorScheme,
+  TouchableOpacity,
 } from 'react-native';
 import { useCharacterStore } from '../store/characterStore';
 import { getEffectiveStats, getXPRequiredForLevel } from '../domain/character';
@@ -96,7 +97,7 @@ export default function CharacterSheet() {
   const isDark = colorScheme === 'dark';
   const colors = isDark ? COLORS.dark : COLORS.light;
 
-  const { character, isInitialized, initialize, processRegeneration } = useCharacterStore();
+  const { character, isInitialized, initialize, processRegeneration, resetCharacter, gainXP, updateStat } = useCharacterStore();
   const effectiveStats = getEffectiveStats(character);
   const activeEffects = character.statusEffects.filter(
     (e) => e.expiresAt > Date.now()
@@ -193,6 +194,22 @@ export default function CharacterSheet() {
         />
       </View>
 
+      {/* Task Completion Button */}
+      <View style={[styles.section, { backgroundColor: colors.surface }]}>
+        <TouchableOpacity
+          style={[styles.taskButton, { borderColor: colors.textSecondary }]}
+          onPress={() => {
+            gainXP(15);
+            updateStat('energy', Math.max(0, character.stats.energy - 2));
+            updateStat('focus', Math.max(0, character.stats.focus - 1));
+          }}
+        >
+          <Text style={[styles.taskButtonText, { color: colors.text }]}>
+            Completed a task
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Status Effects Section */}
       <View style={[styles.section, { backgroundColor: colors.surface }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>
@@ -281,6 +298,22 @@ export default function CharacterSheet() {
           })
         )}
       </View>
+
+      {/* Dev Reset Button */}
+      {__DEV__ && (
+        <View style={[styles.section, { backgroundColor: colors.surface }]}>
+          <TouchableOpacity
+            style={[styles.devResetButton, { borderColor: colors.textSecondary }]}
+            onPress={async () => {
+              await resetCharacter();
+            }}
+          >
+            <Text style={[styles.devResetText, { color: colors.textSecondary }]}>
+              Reset Character (Dev)
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -408,6 +441,31 @@ const styles = StyleSheet.create({
   effectTimer: {
     fontSize: 11,
     marginTop: 4,
+  },
+  devResetButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devResetText: {
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  taskButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'transparent',
+  },
+  taskButtonText: {
+    fontSize: 14,
+    fontWeight: '500',
   },
 });
 
