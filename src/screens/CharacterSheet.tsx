@@ -5,8 +5,10 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
+  Easing,
   useColorScheme,
   TouchableOpacity,
+  AccessibilityInfo,
 } from 'react-native';
 import { useCharacterStore } from '../store/characterStore';
 import { getEffectiveStats, getXPRequiredForLevel } from '../domain/character';
@@ -97,11 +99,185 @@ export default function CharacterSheet() {
   const isDark = colorScheme === 'dark';
   const colors = isDark ? COLORS.dark : COLORS.light;
 
-  const { character, isInitialized, initialize, processRegeneration, resetCharacter, gainXP, updateStat } = useCharacterStore();
+  const { character, isInitialized, initialize, processRegeneration, resetCharacter, gainXP, updateStat, clearLevelUpFlag } = useCharacterStore();
   const effectiveStats = getEffectiveStats(character);
   const activeEffects = character.statusEffects.filter(
     (e) => e.expiresAt > Date.now()
   );
+
+  // Safe stats normalization - ensures all stats are always defined
+  const safeStats = {
+    energy: effectiveStats?.energy ?? 0,
+    focus: effectiveStats?.focus ?? 0,
+    health: effectiveStats?.health ?? 0,
+    mental: effectiveStats?.mental ?? 0,
+  };
+
+  // Level-up animation refs
+  // Native driver values (opacity, scale, transform)
+  const glowOpacity = useRef(new Animated.Value(0)).current;
+  const levelUpTextOpacity = useRef(new Animated.Value(0)).current;
+  const levelTextOpacity = useRef(new Animated.Value(1)).current;
+  const levelCardScale = useRef(new Animated.Value(0)).current;
+  
+  // JS driver values (color, shadow, width)
+  const xpBarColorAnim = useRef(new Animated.Value(0)).current;
+  const levelCardShadow = useRef(new Animated.Value(0)).current;
+  const xpBarWidth = useRef(new Animated.Value(0)).current;
+  const reducedMotion = useRef(false);
+  const levelUpAnimatingRef = useRef(false);
+  const taskCooldownRef = useRef(false);
+  
+  // Micro-copy messages for level-up feedback
+  const microCopyMessages = [
+    "You feel more capable.",
+    "Your baseline has improved.",
+    "A quiet shift in perspective.",
+    "Subtle growth, noticed.",
+  ];
+  const [currentMicroCopyIndex, setCurrentMicroCopyIndex] = React.useState(0);
+
+  // Check for reduced motion preference
+  useEffect(() => {
+    AccessibilityInfo.isReduceMotionEnabled().then((isEnabled) => {
+      reducedMotion.current = isEnabled;
+    });
+  }, []);
+
+  // Handle level-up animation
+  useEffect(() => {
+    if (character.justLeveledUp && !levelUpAnimatingRef.current) {
+      levelUpAnimatingRef.current = true;
+      const totalDuration = reducedMotion.current ? 0 : 1500; // 1.5 seconds total
+      const fadeInDuration = reducedMotion.current ? 0 : 300;
+      const holdDuration = reducedMotion.current ? 0 : 800; // Hold at peak
+      const fadeOutDuration = reducedMotion.current ? 0 : 400;
+
+      // Rotate micro-copy message
+      setCurrentMicroCopyIndex((prev) => (prev + 1) % microCopyMessages.length);
+
+      // Stop all in-flight animations before starting new ones
+      glowOpacity.stopAnimation();
+      levelUpTextOpacity.stopAnimation();
+      levelTextOpacity.stopAnimation();
+      levelCardScale.stopAnimation();
+      xpBarColorAnim.stopAnimation();
+      levelCardShadow.stopAnimation();
+
+      // Start animations
+      Animated.parallel([
+        // Glow pulse around level text
+        Animated.sequence([
+          Animated.timing(glowOpacity, {
+            toValue: 1,
+            duration: fadeInDuration,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.delay(holdDuration),
+          Animated.timing(glowOpacity, {
+            toValue: 0,
+            duration: fadeOutDuration,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+        ]),
+        // Micro-copy text (subtle feedback)
+        Animated.sequence([
+          Animated.timing(levelUpTextOpacity, {
+            toValue: 1,
+            duration: fadeInDuration,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.delay(holdDuration),
+          Animated.timing(levelUpTextOpacity, {
+            toValue: 0,
+            duration: fadeOutDuration,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+        ]),
+        // XP bar color shift
+        Animated.sequence([
+          Animated.timing(xpBarColorAnim, {
+            toValue: 1,
+            duration: fadeInDuration,
+            useNativeDriver: false,
+            easing: Easing.out(Easing.ease),
+          }),
+          Animated.delay(holdDuration),
+          Animated.timing(xpBarColorAnim, {
+            toValue: 0,
+            duration: fadeOutDuration,
+            useNativeDriver: false,
+            easing: Easing.out(Easing.ease),
+          }),
+        ]),
+        // Level card scale/shadow
+        Animated.parallel([
+          // Scale transform (native driver)
+          Animated.sequence([
+            Animated.timing(levelCardScale, {
+              toValue: 1,
+              duration: fadeInDuration,
+              useNativeDriver: true,
+              easing: Easing.out(Easing.ease),
+            }),
+            Animated.delay(holdDuration),
+            Animated.timing(levelCardScale, {
+              toValue: 0,
+              duration: fadeOutDuration,
+              useNativeDriver: true,
+              easing: Easing.out(Easing.ease),
+            }),
+          ]),
+          // Shadow properties (JS driver)
+          Animated.sequence([
+            Animated.timing(levelCardShadow, {
+              toValue: 1,
+              duration: fadeInDuration,
+              useNativeDriver: false,
+              easing: Easing.out(Easing.ease),
+            }),
+            Animated.delay(holdDuration),
+            Animated.timing(levelCardShadow, {
+              toValue: 0,
+              duration: fadeOutDuration,
+              useNativeDriver: false,
+              easing: Easing.out(Easing.ease),
+            }),
+          ]),
+        ]),
+        // Level text subtle transition
+        Animated.sequence([
+          Animated.timing(levelTextOpacity, {
+            toValue: 0.6,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(levelTextOpacity, {
+            toValue: 1,
+            duration: 300,
+            useNativeDriver: true,
+            easing: Easing.out(Easing.ease),
+          }),
+        ]),
+      ]).start(() => {
+        // Release the lock and clear the flag after animation completes
+        levelUpAnimatingRef.current = false;
+        clearLevelUpFlag();
+      });
+    } else {
+      // Reset animations when flag is cleared
+      glowOpacity.setValue(0);
+      levelUpTextOpacity.setValue(0);
+      levelTextOpacity.setValue(1);
+      levelCardScale.setValue(0);
+      xpBarColorAnim.setValue(0);
+      levelCardShadow.setValue(0);
+    }
+  }, [character.justLeveledUp, clearLevelUpFlag]);
 
   // Initialize on mount
   useEffect(() => {
@@ -109,6 +285,15 @@ export default function CharacterSheet() {
       initialize();
     }
   }, [isInitialized, initialize]);
+
+  // Initialize XP bar width on mount or when character changes
+  useEffect(() => {
+    if (isInitialized) {
+      const xpRequired = getXPRequiredForLevel(character.level + 1);
+      const xpProgress = character.xp / xpRequired;
+      xpBarWidth.setValue(xpProgress);
+    }
+  }, [isInitialized, character.level, character.xp, xpBarWidth]);
 
   // Process regeneration periodically
   useEffect(() => {
@@ -120,6 +305,40 @@ export default function CharacterSheet() {
 
     return () => clearInterval(interval);
   }, [isInitialized, processRegeneration]);
+
+  // Animate XP bar width smoothly
+  // This must be declared before any early returns to maintain hook order
+  useEffect(() => {
+    if (!isInitialized) return;
+    
+    const xpRequired = getXPRequiredForLevel(character.level + 1);
+    const xpProgress = character.xp / xpRequired;
+    
+    xpBarWidth.stopAnimation();
+    Animated.timing(xpBarWidth, {
+      toValue: xpProgress,
+      duration: 600,
+      useNativeDriver: false,
+      easing: Easing.out(Easing.ease),
+    }).start();
+  }, [isInitialized, character.xp, character.level, xpBarWidth]);
+
+  // Guarded task completion handler with cooldown
+  const handleTaskComplete = () => {
+    // Prevent rapid re-entry
+    if (taskCooldownRef.current) return;
+
+    taskCooldownRef.current = true;
+
+    gainXP(15);
+    updateStat('energy', Math.max(0, character.stats.energy - 2));
+    updateStat('focus', Math.max(0, character.stats.focus - 1));
+
+    // Release after short cooldown (matches animation timing)
+    setTimeout(() => {
+      taskCooldownRef.current = false;
+    }, 600); // 500–700ms is ideal
+  };
 
   if (!isInitialized) {
     return (
@@ -139,55 +358,127 @@ export default function CharacterSheet() {
       contentContainerStyle={styles.contentContainer}
     >
       {/* Level and XP Section */}
-      <View style={[styles.section, { backgroundColor: colors.surface }]}>
+      <Animated.View
+        style={[
+          styles.section,
+          {
+            backgroundColor: colors.surface,
+            transform: [
+              {
+                scale: levelCardScale.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [1, 1.02],
+                }),
+              },
+            ],
+            shadowColor: isDark ? '#4a9eff' : '#2563eb',
+            shadowOpacity: levelCardShadow.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, isDark ? 0.3 : 0.15],
+            }),
+            shadowRadius: levelCardShadow.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 8],
+            }),
+            shadowOffset: {
+              width: 0,
+              height: 2,
+            },
+            elevation: levelCardShadow.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0, 4],
+            }),
+          },
+        ]}
+      >
         <View style={styles.levelHeader}>
-          <Text style={[styles.levelText, { color: colors.text }]}>
-            Level {character.level}
-          </Text>
+          <View style={styles.levelContainer}>
+            <Animated.View
+              style={[
+                styles.levelGlow,
+                {
+                  opacity: glowOpacity,
+                  backgroundColor: isDark ? 'rgba(74, 158, 255, 0.15)' : 'rgba(37, 99, 235, 0.12)',
+                },
+              ]}
+            />
+            <Animated.Text
+              style={[
+                styles.levelText,
+                {
+                  color: colors.text,
+                  opacity: levelTextOpacity,
+                },
+              ]}
+            >
+              Level {character.level}
+            </Animated.Text>
+          </View>
           <Text style={[styles.xpText, { color: colors.textSecondary }]}>
             {character.xp} / {xpRequired} XP
           </Text>
         </View>
+        <Animated.View
+          style={[
+            styles.levelUpTextContainer,
+            {
+              opacity: levelUpTextOpacity,
+            },
+          ]}
+        >
+          <Text style={[styles.levelUpText, { color: colors.textSecondary }]}>
+            {microCopyMessages[currentMicroCopyIndex]}
+          </Text>
+        </Animated.View>
         <View style={[styles.xpBarBackground, { backgroundColor: colors.xpBarBg }]}>
           <Animated.View
             style={[
               styles.xpBarFill,
               {
-                backgroundColor: colors.xpBar,
-                width: `${xpPercentage}%`,
+                backgroundColor: xpBarColorAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [
+                    colors.xpBar,
+                    isDark ? '#5ba3ff' : '#3b82f6', // Slightly brighter on level up
+                  ],
+                }),
+                width: xpBarWidth.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: ['0%', '100%'],
+                }),
               },
             ]}
           />
         </View>
-      </View>
+      </Animated.View>
 
       {/* Stats Section */}
       <View style={[styles.section, { backgroundColor: colors.surface }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Stats</Text>
         <StatBar
           label="Energy"
-          value={effectiveStats.energy}
+          value={safeStats.energy}
           maxValue={100}
           color={colors.energy}
           colors={colors}
         />
         <StatBar
           label="Focus"
-          value={effectiveStats.focus}
+          value={safeStats.focus}
           maxValue={100}
           color={colors.focus}
           colors={colors}
         />
         <StatBar
           label="Health"
-          value={effectiveStats.health}
+          value={safeStats.health}
           maxValue={100}
           color={colors.health}
           colors={colors}
         />
         <StatBar
           label="Mental"
-          value={effectiveStats.mental}
+          value={safeStats.mental}
           maxValue={100}
           color={colors.mental}
           colors={colors}
@@ -198,11 +489,8 @@ export default function CharacterSheet() {
       <View style={[styles.section, { backgroundColor: colors.surface }]}>
         <TouchableOpacity
           style={[styles.taskButton, { borderColor: colors.textSecondary }]}
-          onPress={() => {
-            gainXP(15);
-            updateStat('energy', Math.max(0, character.stats.energy - 2));
-            updateStat('focus', Math.max(0, character.stats.focus - 1));
-          }}
+          onPress={handleTaskComplete}
+          activeOpacity={0.85}
         >
           <Text style={[styles.taskButtonText, { color: colors.text }]}>
             Completed a task
@@ -347,12 +635,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
+  levelContainer: {
+    position: 'relative',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  levelGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 8,
+  },
   levelText: {
     fontSize: 24,
     fontWeight: '700',
+    position: 'relative',
+    zIndex: 1,
   },
   xpText: {
     fontSize: 14,
+  },
+  levelUpTextContainer: {
+    marginTop: -8,
+    marginBottom: 8,
+    height: 20,
+    justifyContent: 'center',
+  },
+  levelUpText: {
+    fontSize: 13,
+    fontWeight: '500',
+    letterSpacing: 0.5,
   },
   xpBarBackground: {
     height: 8,
