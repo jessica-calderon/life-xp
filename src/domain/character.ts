@@ -176,3 +176,54 @@ export function getActiveStatusEffects(character: Character): StatusEffect[] {
   return character.statusEffects.filter((effect) => effect.expiresAt > now);
 }
 
+/**
+ * Calculate task reward multiplier based on time since last completion
+ * Implements soft cooldown with diminishing returns:
+ * - < 10 seconds: multiply by 0.6 (min floor: 0.2)
+ * - < 30 seconds: multiply by 0.8
+ * - >= 30 seconds: gradually recover toward 1.0 over time
+ * 
+ * @param timeSinceLastMs Time in milliseconds since last task completion
+ * @param currentMultiplier Current multiplier value (default 1.0)
+ * @returns New multiplier value
+ */
+export function getTaskRewardMultiplier(
+  timeSinceLastMs: number,
+  currentMultiplier: number
+): number {
+  const TEN_SECONDS = 10 * 1000;
+  const THIRTY_SECONDS = 30 * 1000;
+  const MIN_MULTIPLIER = 0.2;
+  
+  // If this is the first task (no previous completion), start at 1.0
+  if (timeSinceLastMs === Infinity || timeSinceLastMs < 0) {
+    return 1.0;
+  }
+  
+  // If time delta is >= 30 seconds, gradually recover toward 1.0
+  if (timeSinceLastMs >= THIRTY_SECONDS) {
+    // Recovery: interpolate between current multiplier and 1.0
+    // Recovery rate: 0.15 per 30 seconds (smooth recovery)
+    // This means full recovery takes ~6.67 periods (200 seconds / 3.3 minutes)
+    const recoveryRate = 0.15;
+    const recoveryPeriods = timeSinceLastMs / THIRTY_SECONDS;
+    const recoveryAmount = Math.min(1.0, recoveryRate * recoveryPeriods);
+    const recoveredMultiplier = currentMultiplier + (1.0 - currentMultiplier) * recoveryAmount;
+    return Math.max(MIN_MULTIPLIER, Math.min(1.0, recoveredMultiplier));
+  }
+  
+  // Apply diminishing returns for rapid completions
+  let newMultiplier = currentMultiplier;
+  
+  if (timeSinceLastMs < TEN_SECONDS) {
+    // Very rapid: reduce by 40% (multiply by 0.6)
+    newMultiplier *= 0.6;
+  } else if (timeSinceLastMs < THIRTY_SECONDS) {
+    // Moderate: reduce by 20% (multiply by 0.8)
+    newMultiplier *= 0.8;
+  }
+  
+  // Ensure multiplier doesn't go below minimum
+  return Math.max(MIN_MULTIPLIER, newMultiplier);
+}
+

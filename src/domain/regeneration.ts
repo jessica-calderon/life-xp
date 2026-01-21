@@ -1,5 +1,6 @@
 import { Character, Stats, StatusEffect } from '../types';
 import { clampStat, updateStat } from './character';
+import { getAmbientStateRegenMultipliers } from './ambientState';
 
 // Regeneration rates (per second)
 // Energy: +1 every 10 minutes = 1/600 per second
@@ -14,11 +15,12 @@ export const BASE_REGENERATION_RATES: Stats = {
 };
 
 /**
- * Calculate effective regeneration rates with status effect modifiers
+ * Calculate effective regeneration rates with status effect modifiers and ambient state
  */
 export function getEffectiveRegenerationRates(
   baseRates: Stats,
-  statusEffects: StatusEffect[]
+  statusEffects: StatusEffect[],
+  ambientStateMultipliers?: Partial<Stats>
 ): Stats {
   const modifiers: Stats = {
     energy: 0,
@@ -27,6 +29,7 @@ export function getEffectiveRegenerationRates(
     mental: 0,
   };
 
+  // Apply status effect modifiers
   statusEffects.forEach((effect) => {
     if (effect.regenerationModifiers) {
       Object.entries(effect.regenerationModifiers).forEach(([stat, modifier]) => {
@@ -34,6 +37,13 @@ export function getEffectiveRegenerationRates(
       });
     }
   });
+
+  // Apply ambient state multipliers
+  if (ambientStateMultipliers) {
+    Object.entries(ambientStateMultipliers).forEach(([stat, modifier]) => {
+      modifiers[stat as keyof Stats] += modifier || 0;
+    });
+  }
 
   return {
     energy: Math.max(0, baseRates.energy * (1 + modifiers.energy)),
@@ -66,13 +76,20 @@ export function applyRegeneration(character: Character, currentTime: number): Ch
     return character;
   }
 
-  // Get effective regeneration rates with status effect modifiers
+  // Get effective regeneration rates with status effect modifiers and ambient state
   const activeEffects = character.statusEffects.filter(
     (e) => e.expiresAt > currentTime
   );
+  
+  // Get ambient state multipliers if ambient state is set
+  const ambientStateMultipliers = character.ambientState
+    ? getAmbientStateRegenMultipliers(character.ambientState)
+    : undefined;
+  
   const effectiveRates = getEffectiveRegenerationRates(
     BASE_REGENERATION_RATES,
-    activeEffects
+    activeEffects,
+    ambientStateMultipliers
   );
 
   let updatedCharacter = { ...character };

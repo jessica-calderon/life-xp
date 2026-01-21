@@ -9,10 +9,11 @@ import {
   useColorScheme,
   TouchableOpacity,
   AccessibilityInfo,
+  AppState,
 } from 'react-native';
 import { useCharacterStore } from '../store/characterStore';
 import { getEffectiveStats, getXPRequiredForLevel } from '../domain/character';
-import { StatType } from '../types';
+import { StatType, AmbientState } from '../types';
 
 const COLORS = {
   dark: {
@@ -53,9 +54,45 @@ interface StatBarProps {
   maxValue: number;
   color: string;
   colors: typeof COLORS.dark;
+  hasGlow?: boolean;
 }
 
-function StatBar({ label, value, maxValue, color, colors }: StatBarProps) {
+/**
+ * Get description text for ambient state
+ */
+function getAmbientStateDescription(state: AmbientState): string {
+  switch (state) {
+    case 'RESTED':
+      return 'You feel rested.';
+    case 'CLEAR_HEADED':
+      return 'Your mind feels clear.';
+    case 'OVEREXTENDED':
+      return 'You feel overextended.';
+    default:
+      return '';
+  }
+}
+
+/**
+ * Get accent color for ambient state (for thin accent bar)
+ */
+function getAmbientStateColor(
+  state: AmbientState,
+  colors: typeof COLORS.dark
+): string {
+  switch (state) {
+    case 'RESTED':
+      return colors.energy;
+    case 'CLEAR_HEADED':
+      return colors.focus;
+    case 'OVEREXTENDED':
+      return colors.debuff;
+    default:
+      return colors.textSecondary;
+  }
+}
+
+function StatBar({ label, value, maxValue, color, colors, hasGlow = false }: StatBarProps) {
   const animatedWidth = useRef(new Animated.Value(value / maxValue)).current;
 
   useEffect(() => {
@@ -86,6 +123,11 @@ function StatBar({ label, value, maxValue, color, colors }: StatBarProps) {
                 inputRange: [0, 1],
                 outputRange: ['0%', '100%'],
               }),
+              opacity: hasGlow ? 0.9 : 1.0,
+              shadowColor: hasGlow ? color : 'transparent',
+              shadowOpacity: hasGlow ? 0.3 : 0,
+              shadowRadius: hasGlow ? 4 : 0,
+              shadowOffset: { width: 0, height: 0 },
             },
           ]}
         />
@@ -99,7 +141,7 @@ export default function CharacterSheet() {
   const isDark = colorScheme === 'dark';
   const colors = isDark ? COLORS.dark : COLORS.light;
 
-  const { character, isInitialized, initialize, processRegeneration, resetCharacter, gainXP, updateStat, clearLevelUpFlag } = useCharacterStore();
+  const { character, isInitialized, initialize, processRegeneration, resetCharacter, completeTask, clearLevelUpFlag } = useCharacterStore();
   const effectiveStats = getEffectiveStats(character);
   const activeEffects = character.statusEffects.filter(
     (e) => e.expiresAt > Date.now()
@@ -126,7 +168,6 @@ export default function CharacterSheet() {
   const xpBarWidth = useRef(new Animated.Value(0)).current;
   const reducedMotion = useRef(false);
   const levelUpAnimatingRef = useRef(false);
-  const taskCooldownRef = useRef(false);
   
   // Micro-copy messages for level-up feedback
   const microCopyMessages = [
@@ -306,6 +347,22 @@ export default function CharacterSheet() {
     return () => clearInterval(interval);
   }, [isInitialized, processRegeneration]);
 
+  // Handle app resume/foreground - recalculate ambient state
+  useEffect(() => {
+    if (!isInitialized) return;
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        // App came to foreground - process regeneration and recalculate ambient state
+        processRegeneration();
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [isInitialized, processRegeneration]);
+
   // Animate XP bar width smoothly
   // This must be declared before any early returns to maintain hook order
   useEffect(() => {
@@ -314,30 +371,32 @@ export default function CharacterSheet() {
     const xpRequired = getXPRequiredForLevel(character.level + 1);
     const xpProgress = character.xp / xpRequired;
     
+    // Calculate animation duration based on multiplier
+    // When multiplier < 1, slow down the animation slightly for subtle feedback
+    const multiplier = character.taskSpamMultiplier ?? 1.0;
+    const baseDuration = 600;
+    // Scale duration inversely with multiplier (lower multiplier = slower animation)
+    // Range: 600ms (multiplier 1.0) to 900ms (multiplier 0.2)
+    let duration = baseDuration + (1.0 - multiplier) * 300;
+    
+    // Slightly smoother XP animation for CLEAR_HEADED state
+    const isClearHeaded = character.ambientState === 'CLEAR_HEADED';
+    const easing = isClearHeaded 
+      ? Easing.out(Easing.cubic) // Smoother easing for CLEAR_HEADED
+      : Easing.out(Easing.ease);
+    
     xpBarWidth.stopAnimation();
     Animated.timing(xpBarWidth, {
       toValue: xpProgress,
-      duration: 600,
+      duration: duration,
       useNativeDriver: false,
-      easing: Easing.out(Easing.ease),
+      easing: easing,
     }).start();
-  }, [isInitialized, character.xp, character.level, xpBarWidth]);
+  }, [isInitialized, character.xp, character.level, character.taskSpamMultiplier, xpBarWidth]);
 
-  // Guarded task completion handler with cooldown
+  // Task completion handler (atomic, guarded in store)
   const handleTaskComplete = () => {
-    // Prevent rapid re-entry
-    if (taskCooldownRef.current) return;
-
-    taskCooldownRef.current = true;
-
-    gainXP(15);
-    updateStat('energy', Math.max(0, character.stats.energy - 2));
-    updateStat('focus', Math.max(0, character.stats.focus - 1));
-
-    // Release after short cooldown (matches animation timing)
-    setTimeout(() => {
-      taskCooldownRef.current = false;
-    }, 600); // 500–700ms is ideal
+    completeTask();
   };
 
   if (!isInitialized) {
@@ -461,6 +520,7 @@ export default function CharacterSheet() {
           maxValue={100}
           color={colors.energy}
           colors={colors}
+          hasGlow={character.ambientState === 'RESTED'}
         />
         <StatBar
           label="Focus"
@@ -584,6 +644,24 @@ export default function CharacterSheet() {
               </View>
             );
           })
+        )}
+        {/* Ambient State Card */}
+        {character.ambientState && character.ambientState !== 'NEUTRAL' && (
+          <View
+            style={[
+              styles.ambientStateCard,
+              {
+                backgroundColor: colors.background,
+                borderLeftColor: getAmbientStateColor(character.ambientState, colors),
+              },
+            ]}
+          >
+            <Text
+              style={[styles.ambientStateText, { color: colors.textSecondary }]}
+            >
+              {getAmbientStateDescription(character.ambientState)}
+            </Text>
+          </View>
         )}
       </View>
 
@@ -756,6 +834,16 @@ const styles = StyleSheet.create({
   effectTimer: {
     fontSize: 11,
     marginTop: 4,
+  },
+  ambientStateCard: {
+    padding: 12,
+    borderRadius: 8,
+    marginTop: 8,
+    borderLeftWidth: 3,
+  },
+  ambientStateText: {
+    fontSize: 13,
+    fontStyle: 'italic',
   },
   devResetButton: {
     paddingVertical: 8,
