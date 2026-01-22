@@ -14,6 +14,7 @@ import {
 import { useCharacterStore } from '../store/characterStore';
 import { getEffectiveStats, getXPRequiredForLevel } from '../domain/character';
 import { deriveNarrativeReflection } from '../domain/narrativeReflection';
+import { generateImpactReflection, createImpactReflectionContext } from '../domain/impactReflection';
 import { StatType, AmbientState } from '../types';
 import FlowInspectorDev from './FlowInspectorDev';
 
@@ -126,10 +127,7 @@ function StatBar({ label, value, maxValue, color, colors, hasGlow = false }: Sta
                 outputRange: ['0%', '100%'],
               }),
               opacity: hasGlow ? 0.9 : 1.0,
-              shadowColor: hasGlow ? color : 'transparent',
-              shadowOpacity: hasGlow ? 0.3 : 0,
-              shadowRadius: hasGlow ? 4 : 0,
-              shadowOffset: { width: 0, height: 0 },
+              boxShadow: hasGlow ? `0px 0px 4px ${color}40` : 'none',
             },
           ]}
         />
@@ -180,6 +178,10 @@ export default function CharacterSheet() {
     "Subtle growth, noticed.",
   ];
   const [currentMicroCopyIndex, setCurrentMicroCopyIndex] = React.useState(0);
+
+  // Impact reflection state
+  const [impactReflection, setImpactReflection] = React.useState<string | null>(null);
+  const impactReflectionOpacity = useRef(new Animated.Value(0)).current;
 
   // Check for reduced motion preference
   useEffect(() => {
@@ -399,7 +401,32 @@ export default function CharacterSheet() {
 
   // Task completion handler (atomic, guarded in store)
   const handleTaskComplete = () => {
+    // Complete the task first (updates store synchronously)
     completeTask();
+    
+    // Generate impact reflection after task completion using updated state
+    // Access the store directly to get the updated character
+    const store = useCharacterStore.getState();
+    const now = Date.now();
+    const context = createImpactReflectionContext(store.character, now, -2, -1);
+    const reflection = generateImpactReflection(context);
+    
+    // Show the reflection
+    setImpactReflection(reflection);
+    impactReflectionOpacity.setValue(1);
+    
+    // Auto-fade after 6-8 seconds (randomized between 6-8)
+    const fadeDelay = 6000 + Math.random() * 2000; // 6000-8000ms
+    setTimeout(() => {
+      Animated.timing(impactReflectionOpacity, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: false,
+        easing: Easing.out(Easing.ease),
+      }).start(() => {
+        setImpactReflection(null);
+      });
+    }, fadeDelay);
   };
 
   if (!isInitialized) {
@@ -433,19 +460,15 @@ export default function CharacterSheet() {
                 }),
               },
             ],
-            shadowColor: isDark ? '#4a9eff' : '#2563eb',
-            shadowOpacity: levelCardShadow.interpolate({
+            boxShadow: levelCardShadow.interpolate({
               inputRange: [0, 1],
-              outputRange: [0, isDark ? 0.3 : 0.15],
+              outputRange: [
+                '0px 2px 0px 0px rgba(0, 0, 0, 0)',
+                isDark
+                  ? '0px 2px 8px 0px rgba(74, 158, 255, 0.3)'
+                  : '0px 2px 8px 0px rgba(37, 99, 235, 0.15)',
+              ],
             }),
-            shadowRadius: levelCardShadow.interpolate({
-              inputRange: [0, 1],
-              outputRange: [0, 8],
-            }),
-            shadowOffset: {
-              width: 0,
-              height: 2,
-            },
             elevation: levelCardShadow.interpolate({
               inputRange: [0, 1],
               outputRange: [0, 4],
@@ -559,6 +582,19 @@ export default function CharacterSheet() {
             Completed a task
           </Text>
         </TouchableOpacity>
+        {impactReflection && (
+          <Animated.Text
+            style={[
+              styles.impactReflectionText,
+              {
+                color: colors.textSecondary,
+                opacity: impactReflectionOpacity,
+              },
+            ]}
+          >
+            {impactReflection}
+          </Animated.Text>
+        )}
       </View>
 
       {/* Status Effects Section */}
@@ -887,6 +923,13 @@ const styles = StyleSheet.create({
   taskButtonText: {
     fontSize: 14,
     fontWeight: '500',
+  },
+  impactReflectionText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 8,
+    textAlign: 'center',
+    opacity: 0.7,
   },
 });
 
