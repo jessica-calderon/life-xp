@@ -5,6 +5,7 @@ import { addXP, removeExpiredStatusEffects, clearLevelUpFlag, getTaskRewardMulti
 import { applyRegeneration } from '../domain/regeneration';
 import { deriveAmbientState } from '../domain/ambientState';
 import { getSecondsSinceLastTask, getMinutesSinceLastFlow, FLOW_TASK_SPAM_THRESHOLD, FLOW_NO_TASK_WINDOW_MS, FLOW_COOLDOWN_MS } from '../domain/flowState';
+import { createTaskEffortContext, getTaskEffortTier, applyEffortTierEffects } from '../domain/impactReflection';
 
 const STORAGE_KEY = '@life-xp:character';
 
@@ -43,6 +44,7 @@ interface CharacterStore {
   removeStatusEffect: (id: string) => void;
   processRegeneration: () => void;
   resetCharacter: () => Promise<void>;
+  jumpTimeBy: (milliseconds: number) => void; // DEV-ONLY: Jump time forward for testing
   
   // Internal
   _saveToStorage: () => Promise<void>;
@@ -98,6 +100,17 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     const { character } = get();
     const now = Date.now();
     
+    // Infer effort tier BEFORE applying stat changes (uses current state)
+    // Count current task in recent task count for effort calculation
+    const lastTaskTimestamps = character.lastTaskTimestamps || [];
+    const tenMinutesAgo = now - 10 * 60 * 1000;
+    const recentTaskCount = lastTaskTimestamps.filter(ts => ts > tenMinutesAgo).length + 1; // +1 for current task
+    const effortContext = {
+      ...createTaskEffortContext(character, now),
+      recentTaskCount, // Override with count that includes current task
+    };
+    const effortTier = getTaskEffortTier(effortContext);
+    
     // Calculate time since last completion
     const lastTaskTime = character.lastTaskCompletedAt;
     const timeSinceLastMs = lastTaskTime ? now - lastTaskTime : Infinity;
@@ -119,11 +132,9 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     const finalFocusChange = Math.round(baseFocusChange * newMultiplier);
     
     // Track task completion for Momentum
-    const lastTaskTimestamps = character.lastTaskTimestamps || [];
     const updatedTimestamps = [...lastTaskTimestamps, now];
     
     // Remove timestamps older than 10 minutes
-    const tenMinutesAgo = now - 10 * 60 * 1000;
     const recentTimestamps = updatedTimestamps.filter(ts => ts > tenMinutesAgo);
     
     // Check if Momentum is currently active
@@ -192,7 +203,7 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     const energyUpdated = Math.max(0, xpUpdated.stats.energy + finalEnergyChange);
     const focusUpdated = Math.max(0, xpUpdated.stats.focus + finalFocusChange);
     
-    const finalCharacter: Character = {
+    let finalCharacter: Character = {
       ...xpUpdated,
       stats: {
         ...xpUpdated.stats,
@@ -200,6 +211,9 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
         focus: focusUpdated,
       },
     };
+    
+    // Apply effort tier effects (subtle mechanical adjustments)
+    finalCharacter = applyEffortTierEffects(finalCharacter, effortTier, now);
     
     // Recalculate ambient state after all updates
     finalCharacter.ambientState = deriveAmbientState(finalCharacter, now);
@@ -363,6 +377,61 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     set({ character: resetCharacter, isCompletingTask: false });
     // Save the default state to storage
     await get()._saveToStorage();
+  },
+
+  jumpTimeBy: (milliseconds: number) => {
+    // DEV-ONLY: This function should never be called in production
+    if (!__DEV__) {
+      console.warn('jumpTimeBy called in production - this should not happen');
+      return;
+    }
+
+    const { character } = get();
+    const now = Date.now();
+
+    // We adjust timestamps backward (subtract milliseconds) to simulate time passing.
+    // This approach ensures all time-delta calculations (regeneration, decay, etc.)
+    // work correctly through existing systems rather than directly mutating stats.
+    const updatedCharacter: Character = {
+      ...character,
+      // Adjust main regeneration timestamp - this is the primary timestamp used
+      // by applyRegeneration() to calculate stat recovery over time
+      lastRegenerationTime: character.lastRegenerationTime - milliseconds,
+      
+      // Adjust task completion timestamp for spam prevention and flow calculations
+      lastTaskCompletedAt: character.lastTaskCompletedAt
+        ? character.lastTaskCompletedAt - milliseconds
+        : null,
+      
+      // Adjust all task timestamps in the array (used for Momentum tracking)
+      // Each timestamp represents when a task was completed, so we shift them all back
+      lastTaskTimestamps: character.lastTaskTimestamps
+        ? character.lastTaskTimestamps.map(ts => ts - milliseconds)
+        : [],
+    };
+
+    // If flowState exists, adjust its timestamps as well
+    // Note: flowState may not be in the Character type definition but could exist at runtime
+    const flowState = (character as any).flowState;
+    if (flowState) {
+      (updatedCharacter as any).flowState = {
+        ...flowState,
+        startedAt: flowState.startedAt ? flowState.startedAt - milliseconds : flowState.startedAt,
+        lastEndedAt: flowState.lastEndedAt ? flowState.lastEndedAt - milliseconds : flowState.lastEndedAt,
+      };
+    }
+
+    // After adjusting timestamps, recompute derived stats using existing regeneration logic.
+    // This ensures all progression flows through real game systems (regeneration rates,
+    // status effects, ambient state multipliers, etc.) rather than direct stat manipulation.
+    let finalCharacter = applyRegeneration(updatedCharacter, now);
+    finalCharacter = removeExpiredStatusEffects(finalCharacter);
+    
+    // Recalculate ambient state after regeneration
+    finalCharacter.ambientState = deriveAmbientState(finalCharacter, now);
+
+    set({ character: finalCharacter });
+    get()._saveToStorage();
   },
 
   _saveToStorage: async () => {

@@ -14,7 +14,8 @@ import {
 import { useCharacterStore } from '../store/characterStore';
 import { getEffectiveStats, getXPRequiredForLevel } from '../domain/character';
 import { deriveNarrativeReflection } from '../domain/narrativeReflection';
-import { generateImpactReflection, createImpactReflectionContext } from '../domain/impactReflection';
+import { generateImpactReflection, createImpactReflectionContext, createTaskEffortContext, getTaskEffortTier } from '../domain/impactReflection';
+import { getIdentityReflection, createIdentityReflectionContext, getIdentityReflectionRule } from '../domain/identityReflection';
 import { StatType, AmbientState } from '../types';
 import FlowInspectorDev from './FlowInspectorDev';
 
@@ -141,12 +142,18 @@ export default function CharacterSheet() {
   const isDark = colorScheme === 'dark';
   const colors = isDark ? COLORS.dark : COLORS.light;
 
-  const { character, isInitialized, initialize, processRegeneration, resetCharacter, completeTask, clearLevelUpFlag } = useCharacterStore();
+  const { character, isInitialized, initialize, processRegeneration, resetCharacter, completeTask, clearLevelUpFlag, jumpTimeBy } = useCharacterStore();
   const effectiveStats = getEffectiveStats(character);
   const activeEffects = character.statusEffects.filter(
     (e) => e.expiresAt > Date.now()
   );
   const reflection = deriveNarrativeReflection(character, Date.now());
+  
+  // Calculate identity reflection
+  const now = Date.now();
+  const identityContext = createIdentityReflectionContext(character, now);
+  const identityReflection = getIdentityReflection(identityContext);
+  const identityReflectionRule = __DEV__ ? getIdentityReflectionRule(identityContext) : null;
 
   // Safe stats normalization - ensures all stats are always defined
   const safeStats = {
@@ -409,7 +416,10 @@ export default function CharacterSheet() {
     const store = useCharacterStore.getState();
     const now = Date.now();
     const context = createImpactReflectionContext(store.character, now, -2, -1);
-    const reflection = generateImpactReflection(context);
+    // Calculate effort tier for subtle reflection variation (based on current state)
+    const effortContext = createTaskEffortContext(store.character, now);
+    const effortTier = getTaskEffortTier(effortContext);
+    const reflection = generateImpactReflection({ ...context, effortTier });
     
     // Show the reflection
     setImpactReflection(reflection);
@@ -571,6 +581,20 @@ export default function CharacterSheet() {
         />
       </View>
 
+      {/* Identity Reflection */}
+      {identityReflection && (
+        <View style={[styles.section, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.identityReflectionText, { color: colors.textSecondary }]}>
+            {identityReflection}
+          </Text>
+          {identityReflectionRule && identityReflectionRule !== 'None' && (
+            <Text style={[styles.identityReflectionDebug, { color: colors.textSecondary }]}>
+              [{identityReflectionRule}]
+            </Text>
+          )}
+        </View>
+      )}
+
       {/* Task Completion Button */}
       <View style={[styles.section, { backgroundColor: colors.surface }]}>
         <TouchableOpacity
@@ -710,9 +734,63 @@ export default function CharacterSheet() {
         )}
       </View>
 
-      {/* Dev Reset Button */}
+      {/* Dev Menu */}
       {__DEV__ && (
         <View style={[styles.section, { backgroundColor: colors.surface }]}>
+          <Text style={[styles.devSectionTitle, { color: colors.textSecondary }]}>
+            Dev Tools
+          </Text>
+          
+          {/* Time Jump */}
+          <View style={styles.devSubsection}>
+            <Text style={[styles.devLabel, { color: colors.textSecondary }]}>
+              Time Jump:
+            </Text>
+            <View style={styles.devButtonRow}>
+              <TouchableOpacity
+                style={[styles.devTimeButton, { borderColor: colors.textSecondary }]}
+                onPress={() => jumpTimeBy(10 * 60 * 1000)}
+              >
+                <Text style={[styles.devTimeButtonText, { color: colors.textSecondary }]}>
+                  +10m
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.devTimeButton, { borderColor: colors.textSecondary }]}
+                onPress={() => jumpTimeBy(60 * 60 * 1000)}
+              >
+                <Text style={[styles.devTimeButtonText, { color: colors.textSecondary }]}>
+                  +1h
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.devTimeButton, { borderColor: colors.textSecondary }]}
+                onPress={() => jumpTimeBy(6 * 60 * 60 * 1000)}
+              >
+                <Text style={[styles.devTimeButtonText, { color: colors.textSecondary }]}>
+                  +6h
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.devTimeButton, { borderColor: colors.textSecondary }]}
+                onPress={() => jumpTimeBy(24 * 60 * 60 * 1000)}
+              >
+                <Text style={[styles.devTimeButtonText, { color: colors.textSecondary }]}>
+                  +1d
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.devTimeButton, { borderColor: colors.textSecondary }]}
+                onPress={() => jumpTimeBy(3 * 24 * 60 * 60 * 1000)}
+              >
+                <Text style={[styles.devTimeButtonText, { color: colors.textSecondary }]}>
+                  +3d
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          {/* Reset Button */}
           <TouchableOpacity
             style={[styles.devResetButton, { borderColor: colors.textSecondary }]}
             onPress={async () => {
@@ -720,7 +798,7 @@ export default function CharacterSheet() {
             }}
           >
             <Text style={[styles.devResetText, { color: colors.textSecondary }]}>
-              Reset Character (Dev)
+              Reset Character
             </Text>
           </TouchableOpacity>
         </View>
@@ -899,6 +977,39 @@ const styles = StyleSheet.create({
     marginTop: 12,
     opacity: 0.7,
   },
+  devSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  devSubsection: {
+    marginBottom: 12,
+  },
+  devLabel: {
+    fontSize: 12,
+    marginBottom: 8,
+    fontWeight: '500',
+  },
+  devButtonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  devTimeButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 4,
+    borderWidth: 1,
+    minWidth: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  devTimeButtonText: {
+    fontSize: 11,
+    fontWeight: '500',
+  },
   devResetButton: {
     paddingVertical: 8,
     paddingHorizontal: 12,
@@ -906,6 +1017,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 4,
   },
   devResetText: {
     fontSize: 12,
@@ -930,6 +1042,20 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
     opacity: 0.7,
+  },
+  identityReflectionText: {
+    fontSize: 13,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    opacity: 0.6,
+    lineHeight: 20,
+  },
+  identityReflectionDebug: {
+    fontSize: 10,
+    marginTop: 4,
+    textAlign: 'center',
+    opacity: 0.4,
+    fontFamily: 'monospace',
   },
 });
 
