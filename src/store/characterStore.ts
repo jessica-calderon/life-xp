@@ -4,6 +4,7 @@ import { Character, Stats, StatusEffect } from '../types';
 import { addXP, removeExpiredStatusEffects, clearLevelUpFlag, getTaskRewardMultiplier } from '../domain/character';
 import { applyRegeneration } from '../domain/regeneration';
 import { deriveAmbientState } from '../domain/ambientState';
+import { getSecondsSinceLastTask, getMinutesSinceLastFlow, FLOW_TASK_SPAM_THRESHOLD, FLOW_NO_TASK_WINDOW_MS, FLOW_COOLDOWN_MS } from '../domain/flowState';
 
 const STORAGE_KEY = '@life-xp:character';
 
@@ -385,4 +386,75 @@ export const useCharacterStore = create<CharacterStore>((set, get) => ({
     return null;
   },
 }));
+
+/**
+ * Get debug information for Flow Inspector
+ * Pure function - takes store state and returns debug info
+ */
+export function getFlowDebugInfo(
+  store: CharacterStore,
+  now: number
+): {
+  ambientStateOk: boolean;
+  ambientState: string;
+  momentumActive: boolean;
+  momentumDurationMs: number;
+  spamMultiplierOk: boolean;
+  spamMultiplier: number;
+  pauseOk: boolean;
+  secondsSinceLastTask: number;
+  cooldownOk: boolean;
+  minutesSinceLastFlow: number | null;
+} {
+  const character = store.character;
+  const ambientState = character.ambientState ?? 'NEUTRAL';
+  
+  // Check ambient state (should be RESTED or CLEAR_HEADED)
+  const ambientStateOk = ambientState === 'RESTED' || ambientState === 'CLEAR_HEADED';
+  
+  // Check momentum
+  const activeMomentum = character.statusEffects.find(
+    (e) => e.id?.startsWith('momentum-') && e.expiresAt > now
+  );
+  const momentumActive = !!activeMomentum;
+  
+  let momentumDurationMs = 0;
+  if (activeMomentum) {
+    // Extract timestamp from ID if possible
+    const idParts = activeMomentum.id.split('-');
+    let momentumStartedAt: number;
+    if (idParts.length >= 2 && !isNaN(Number(idParts[1]))) {
+      momentumStartedAt = Number(idParts[1]);
+    } else {
+      // Fallback: use expiresAt - duration
+      momentumStartedAt = activeMomentum.expiresAt - activeMomentum.duration;
+    }
+    momentumDurationMs = now - momentumStartedAt;
+  }
+  
+  // Check spam multiplier
+  const spamMultiplier = character.taskSpamMultiplier ?? 1.0;
+  const spamMultiplierOk = spamMultiplier >= FLOW_TASK_SPAM_THRESHOLD;
+  
+  // Check pause (no task in last 60 seconds)
+  const secondsSinceLastTask = getSecondsSinceLastTask(character, now);
+  const pauseOk = secondsSinceLastTask >= FLOW_NO_TASK_WINDOW_MS / 1000;
+  
+  // Check cooldown (no flow in last 90 minutes)
+  const minutesSinceLastFlow = getMinutesSinceLastFlow(character, now);
+  const cooldownOk = minutesSinceLastFlow === null || minutesSinceLastFlow >= FLOW_COOLDOWN_MS / (60 * 1000);
+  
+  return {
+    ambientStateOk,
+    ambientState,
+    momentumActive,
+    momentumDurationMs,
+    spamMultiplierOk,
+    spamMultiplier,
+    pauseOk,
+    secondsSinceLastTask,
+    cooldownOk,
+    minutesSinceLastFlow,
+  };
+}
 

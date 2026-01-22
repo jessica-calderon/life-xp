@@ -13,7 +13,9 @@ import {
 } from 'react-native';
 import { useCharacterStore } from '../store/characterStore';
 import { getEffectiveStats, getXPRequiredForLevel } from '../domain/character';
+import { deriveNarrativeReflection } from '../domain/narrativeReflection';
 import { StatType, AmbientState } from '../types';
+import FlowInspectorDev from './FlowInspectorDev';
 
 const COLORS = {
   dark: {
@@ -146,6 +148,7 @@ export default function CharacterSheet() {
   const activeEffects = character.statusEffects.filter(
     (e) => e.expiresAt > Date.now()
   );
+  const reflection = deriveNarrativeReflection(character, Date.now());
 
   // Safe stats normalization - ensures all stats are always defined
   const safeStats = {
@@ -663,6 +666,12 @@ export default function CharacterSheet() {
             </Text>
           </View>
         )}
+        {/* Narrative Reflection */}
+        {reflection && (
+          <Text style={[styles.reflectionText, { color: colors.textSecondary }]}>
+            {reflection}
+          </Text>
+        )}
       </View>
 
       {/* Dev Reset Button */}
@@ -680,6 +689,9 @@ export default function CharacterSheet() {
           </TouchableOpacity>
         </View>
       )}
+
+      {/* Flow Debug Panel */}
+      {__DEV__ && <FlowInspectorDev colors={colors} />}
     </ScrollView>
   );
 }
@@ -844,6 +856,12 @@ const styles = StyleSheet.create({
   ambientStateText: {
     fontSize: 13,
     fontStyle: 'italic',
+  },
+  reflectionText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 12,
+    opacity: 0.7,
   },
   devResetButton: {
     paddingVertical: 8,
